@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <title>Invoice</title>
+  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    .invoice { border:1px solid var(--line); border-radius:12px; padding:24px; }
+    .hdr { display:flex; justify-content:space-between; gap:24px; }
+    .muted { color:var(--muted); }
+    @page { size: A4; margin: 12mm; }
+
+    .photo-print-page {
+      page-break-before: always;
+      text-align: center;
+      margin-top: 32px;
+    }
+    .photo-print-img {
+      width: 100%;
+      max-width: 100vw;
+      max-height: 95vh;
+      object-fit: contain;
+    }
+    @media print {
+      #photosSec {
+        display: block !important;
+        margin-top: 0 !important;
+      }
+      .photo-print-page {
+        page-break-before: always;
+        break-before: page;
+        margin: 0;
+        padding: 0;
+      }
+      .photo-print-img {
+        width: 100vw !important;
+        height: auto !important;
+        max-height: 95vh !important;
+        object-fit: contain !important;
+        margin: 0;
+        padding: 0;
+        display: block;
+      }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="actions no-print">
+    <a class="btn" href="index.html">Back</a>
+    <a class="btn" id="editBtn">Edit</a>
+    <button class="btn" id="dupBtn">Duplicate</button>
+    <button class="btn primary" onclick="window.print()">Print / Save PDF</button>
+  </div>
+
+  <div class="invoice" id="inv"></div>
+  <div id="photosSec" style="margin-top:16px"></div>
+</div>
+
+<script type="module">
+import { getInvoice, uid, putInvoice, getFile } from './db.js';
+
+const id = (location.hash.match(/#i=([A-Za-z0-9_\-]+)/) || [])[1];
+if (!id) { document.getElementById('inv').textContent = 'Missing invoice id.'; throw 0; }
+
+function money(n){ return '£' + Number(n||0).toFixed(2); }
+function safe(t){ return (t||'').replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s])); }
+
+function formatDateHeading(dateStr) {
+  const d = new Date(dateStr);
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const day = days[d.getDay()];
+  const date = d.getDate();
+  const suffix = (n) => (n>3 && n<21) ? 'th' : ['th','st','nd','rd','th'][Math.min(n%10,4)];
+  return `${day} ${date}${suffix(date)} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function render(inv) {
+  const el = document.getElementById('inv');
+  const items = inv.items || [];
+
+  // Group items by date
+  const grouped = {};
+  for (const i of items) {
+    const date = i.date || inv.invoiceDate;
+    if (!grouped[date]) grouped[date] = [];
+    grouped[date].push(i);
+  }
+
+  let rows = '';
+  Object.entries(grouped).sort().forEach(([date, items]) => {
+    const dayTotal = items.reduce((sum, i) => sum + Math.round(i.qty * i.unitPrice * 100) / 100, 0);
+    rows += `
+      <tr><td colspan="4" style="padding-top:18px;padding-bottom:4px">
+        <strong style="font-size:1.1em">${formatDateHeading(date)}</strong>
+        <hr style="margin:4px 0 8px 0">
+      </td></tr>
+    `;
+    rows += items.map(i=>`
+      <tr>
+        <td>${safe(i.description)}</td>
+        <td>${i.qty}</td>
+        <td>${money(i.unitPrice)}</td>
+        <td>${money(Math.round(i.qty*i.unitPrice*100)/100)}</td>
+      </tr>
+    `).join('');
+    rows += `
+      <tr>
+        <td colspan="3" style="text-align:right; font-weight:bold; border-top:2px solid var(--line);">Total for this day</td>
+        <td style="font-weight:bold; border-top:2px solid var(--line);">${money(dayTotal)}</td>
+      </tr>
+    `;
+  });
+
+  el.innerHTML = `
+    <div class="hdr">
+      <div>
+        <h1 style="margin:0">INVOICE</h1>
+        <div><strong>${safe(inv.seller?.name)}</strong></div>
+        <div class="muted">${safe(inv.seller?.address)}</div>
+        <div class="muted">${safe(inv.seller?.email || '')} ${safe(inv.seller?.phone || '')}</div>
+        <div class="muted"><em>Not VAT registered — no VAT charged</em></div>
+      </div>
+      <div>
+        <div><strong>Invoice No.</strong> ${safe(inv.invoiceNumber)}</div>
+        <div><strong>Invoice Date</strong> ${safe(inv.invoiceDate)}</div>
+        <div><strong>Supply Date</strong> ${safe(inv.supplyDate || inv.invoiceDate)}</div>
+      </div>
+    </div>
+    <hr />
+    <div>
+      <div class="muted">Bill to</div>
+      <div><strong>${safe(inv.buyer?.name || '')}</strong></div>
+      <div class="muted">${safe(inv.buyer?.address || '')}</div>
+      <div class="muted">${safe(inv.buyer?.email || '')}</div>
+    </div>
+    <div class="table-wrapper" style="margin-top:12px">
+      <table class="table">
+        <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><td colspan="3" style="text-align:right"><strong>Total</strong></td><td><strong>${money(inv.totals?.grandTotal)}</strong></td></tr></tfoot>
+      </table>
+    </div>
+    <div style="margin-top:12px">
+      <div><strong>Payment terms:</strong> ${safe(inv.payment?.terms || '')}</div>
+      ${inv.notes ? `<div class="muted" style="margin-top:8px">${safe(inv.notes)}</div>` : ''}
+    </div>`;
+}
+
+async function renderPhotos(inv) {
+  const sec = document.getElementById('photosSec');
+  const atts = inv.attachments || [];
+  if (!atts.length) { sec.innerHTML = ''; return; }
+  let html = '<h2 style="margin-top:32px;">Photos</h2>';
+  for (const a of atts) {
+    const rec = await getFile(a.fileId);
+    if (!rec?.blob) continue;
+    const url = URL.createObjectURL(rec.blob);
+    html += `
+      <div class="photo-print-page">
+        <img src="${url}" alt="${safe(a.caption || '')}" class="photo-print-img">
+        ${a.caption ? `<div class="muted" style="margin-top:8px">${safe(a.caption)}</div>` : ''}
+      </div>
+    `;
+  }
+  sec.innerHTML = html;
+}
+
+(async function init(){
+  const inv = await getInvoice(id);
+  if (!inv) { document.getElementById('inv').textContent = 'Invoice not found.'; return; }
+  render(inv);
+  await renderPhotos(inv);
+
+  editBtn.onclick = () => location.href = `builder.html#edit=${id}`;
+  dupBtn.onclick = async () => {
+    const copy = structuredClone(inv);
+    copy.id = uid('inv');
+    copy.invoiceNumber = copy.invoiceNumber + '-COPY';
+    copy.createdAt = new Date().toISOString();
+    await putInvoice(copy);
+    location.href = `view.html#i=${copy.id}`;
+  };
+})();
+</script>
+</body>
+</html>

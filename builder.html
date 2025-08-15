@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <title>Build Invoice</title>
+  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+<div class="container">
+  <h1>Invoice Builder</h1>
+  <div class="card">
+    <div class="row">
+      <div><label>Invoice number<input id="inv_no" class="input" placeholder="INV-2025-0001"></label></div>
+      <div><label>Invoice date<input id="inv_date" class="input" type="date"></label></div>
+      <div><label>Supply date<input id="sup_date" class="input" type="date"></label></div>
+      <div>
+        <label>Client<select id="buyer" class="input"></select></label>
+        <small><a href="config.html">Manage clients</a></small>
+      </div>
+    </div>
+
+    <h3>Items</h3>
+    <div class="table-wrapper">
+      <table class="table" id="items">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Description</th>
+            <th>Qty</th>
+            <th>Unit price</th>
+            <th>Line total</th>
+            <th class="no-print">—</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="actions no-print"><button class="btn" id="addItem">Add item</button></div>
+
+    <h3>Photos</h3>
+    <div class="card no-print">
+      <input id="photoInput" class="input" type="file" accept="image/*" capture="environment" multiple>
+      <small>Tip: use your phone camera. Images are compressed locally for privacy.</small>
+      <div id="photosGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:8px"></div>
+    </div>
+
+    <div class="row">
+      <div><label>Notes<textarea id="notes" class="input" rows="3" placeholder="Not VAT registered — no VAT charged."></textarea></label></div>
+      <div><label>Payment terms<input id="terms" class="input" placeholder="Payment due within 14 days"></label></div>
+    </div>
+
+    <div class="card">
+      <strong>Subtotal / Total: £<span id="grand">0.00</span></strong>
+    </div>
+
+    <div class="actions no-print">
+      <button class="btn primary" id="save">Save</button>
+      <a class="btn" id="viewLink">View</a>
+      <a class="btn" href="index.html">Back</a>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { uid, putInvoice, getInvoice, getSetting, listClients, putFile, getFile } from './db.js';
+
+const tbody = document.querySelector('#items tbody');
+const addItemBtn = document.getElementById('addItem');
+const viewLink = document.getElementById('viewLink');
+
+function addRow(item={description:'', qty:1, unitPrice:0, date:today()}) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="input date" type="date" value="${item.date || today()}"></td>
+    <td><input class="input desc" value="${item.description}"></td>
+    <td><input class="input qty" type="number" min="0" step="1" value="${item.qty}"></td>
+    <td><input class="input price" type="number" min="0" step="0.01" value="${item.unitPrice}"></td>
+    <td class="lt">£0.00</td>
+    <td class="no-print"><button class="btn del">✕</button></td>`;
+  tbody.appendChild(tr);
+  tr.addEventListener('input', updateTotals);
+  tr.querySelector('.del').onclick = () => { tr.remove(); updateTotals(); };
+  updateTotals();
+}
+
+function money(n){ return Number(n||0).toFixed(2); }
+function today(){ return new Date().toISOString().slice(0,10); }
+
+function collectItems() {
+  return [...tbody.querySelectorAll('tr')].map(tr => {
+    const d = tr.querySelector('.desc').value.trim().substring(0, 200);
+    const q = Math.max(0, parseFloat(tr.querySelector('.qty').value)||0);
+    const p = Math.max(0, parseFloat(tr.querySelector('.price').value)||0);
+    const date = tr.querySelector('.date').value || today();
+    return { description: d, qty: q, unitPrice: p, date };
+  }).filter(i => i.description && i.qty>0);
+}
+
+function updateTotals(){
+  let total = 0;
+  [...tbody.querySelectorAll('tr')].forEach(tr => {
+    const q = parseFloat(tr.querySelector('.qty').value)||0;
+    const p = parseFloat(tr.querySelector('.price').value)||0;
+    const lt = Math.round((q*p)*100)/100;
+    tr.querySelector('.lt').textContent = '£' + money(lt);
+    total += lt;
+  });
+  document.getElementById('grand').textContent = money(total);
+}
+
+// Photos / attachments
+let attachments = []; // [{fileId, caption}]
+
+async function fileToCompressedJpeg(file, maxDim=1600, quality=0.82) {
+  const img = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, w, h);
+  const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+  return blob || file;
+}
+function renderThumbs() {
+  const grid = document.getElementById('photosGrid');
+  grid.innerHTML = '';
+  attachments.forEach((a, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'card';
+    wrap.style.padding = '6px';
+    const imgEl = document.createElement('img');
+    imgEl.alt = 'photo';
+    imgEl.style.width = '100%';
+    imgEl.style.aspectRatio = '4/3';
+    imgEl.style.objectFit = 'cover';
+
+    getFile(a.fileId).then(f => {
+      if (f?.blob) imgEl.src = URL.createObjectURL(f.blob);
+    });
+
+    const cap = document.createElement('input');
+    cap.className = 'input';
+    cap.placeholder = 'Caption (optional)';
+    cap.value = a.caption || '';
+    cap.oninput = () => { attachments[idx].caption = cap.value.trim(); };
+
+    const del = document.createElement('button');
+    del.className = 'btn';
+    del.textContent = 'Remove';
+    del.onclick = () => { attachments.splice(idx,1); renderThumbs(); };
+
+    wrap.appendChild(imgEl);
+    wrap.appendChild(cap);
+    wrap.appendChild(del);
+    grid.appendChild(wrap);
+  });
+}
+photoInput.onchange = async (e) => {
+  const files = [...e.target.files];
+  for (const f of files) {
+    if (!/^image\//.test(f.type)) continue;
+    const jpeg = await fileToCompressedJpeg(f);
+    const rec = { id: uid('file'), blob: jpeg, name: f.name, type: 'image/jpeg', createdAt: new Date().toISOString() };
+    await putFile(rec);
+    attachments.push({ fileId: rec.id, caption: '' });
+  }
+  renderThumbs();
+};
+
+// Buyer select
+async function loadBuyerOptions() {
+  const sel = document.getElementById('buyer');
+  const clients = await listClients();
+  sel.innerHTML = `<option value="">— Enter manually —</option>` + clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+}
+
+// Editing support
+let editingId = null;
+async function maybeLoadEdit(){
+  const m = location.hash.match(/#edit=([A-Za-z0-9_\-]+)/);
+  if (!m) return;
+  editingId = m[1];
+  const inv = await getInvoice(editingId);
+  if (!inv) return;
+  inv_no.value = inv.invoiceNumber || '';
+  inv_date.value = inv.invoiceDate || today();
+  sup_date.value = inv.supplyDate || inv.invoiceDate || today();
+  notes.value = inv.notes || '';
+  const seller = await getSetting('seller', {});
+  terms.value = inv.payment?.terms || seller.terms || 'Payment due within 14 days';
+  tbody.innerHTML = '';
+  (inv.items||[]).forEach(addRow);
+  attachments = Array.isArray(inv.attachments) ? inv.attachments : [];
+  renderThumbs();
+  updateTotals();
+}
+
+document.getElementById('save').onclick = async () => {
+  const seller = await getSetting('seller', null);
+  if (!seller || !seller.name || !seller.address) {
+    return alert('Add your seller details first (Settings).');
+  }
+  const items = collectItems();
+  if (!items.length) return alert('Add at least one item.');
+  const grandTotal = items.reduce((s,i)=> s + Math.round(i.qty*i.unitPrice*100)/100, 0);
+  const id = editingId || uid('inv');
+  const buyerSelect = document.getElementById('buyer');
+  let buyer = {};
+  if (buyerSelect.value) {
+    const cs = await listClients();
+    buyer = cs.find(c => c.id === buyerSelect.value) || {};
+  }
+  const invoice = {
+    schemaVersion: 2,
+    id,
+    createdAt: editingId ? undefined : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    invoiceNumber: inv_no.value.trim() || id.toUpperCase(),
+    invoiceDate: inv_date.value || today(),
+    supplyDate: sup_date.value || inv_date.value || today(),
+    seller,
+    buyer: {
+      name: buyer.name || '(Enter client in Settings or choose one)',
+      address: buyer.address || '',
+      email: buyer.email || ''
+    },
+    items,
+    currency: seller.currency || 'GBP',
+    totals: { subtotal: grandTotal, grandTotal },
+    payment: { terms: terms.value.trim() || seller.terms || 'Payment due within 14 days' },
+    notes: notes.value.trim() || 'Not VAT registered — no VAT charged.',
+    attachments
+  };
+  await putInvoice(invoice);
+  location.href = `view.html#i=${id}`;
+};
+
+addItemBtn.onclick = () => addRow();
+
+(async function init(){
+  inv_date.value = today();
+  sup_date.value = today();
+  const seller = await getSetting('seller', null);
+  if (!await getSetting('isInit', false) || !seller) {
+    alert('First run: please add your seller details.');
+    location.href = 'config.html';
+    return;
+  }
+  terms.value = seller.terms || 'Payment due within 14 days';
+  notes.value = 'Not VAT registered — no VAT charged.';
+  await loadBuyerOptions();
+  // sample lines (you can remove)
+  addRow({ description: 'Cement (25kg bag)', qty: 3, unitPrice: 7.50 });
+  addRow({ description: 'Building sand (25kg bag)', qty: 4, unitPrice: 3.80 });
+  await maybeLoadEdit();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <title>Invoices</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+<div class="container">
+  <h1>Invoices</h1>
+  <div class="actions no-print">
+    <a class="btn primary" href="builder.html">Create new</a>
+    <a class="btn" href="config.html">Settings / Clients</a>
+  </div>
+
+  <div id="empty" class="card" style="display:none">No invoices yet.</div>
+  <div class="table-wrapper">
+    <table class="table" id="list" aria-label="Invoices"></table>
+  </div>
+</div>
+
+<script type="module">
+import { listInvoices, deleteInvoice, getInvoice, deleteFile } from './db.js';
+
+async function render() {
+  const data = await listInvoices();
+  const table = document.getElementById('list');
+  const empty = document.getElementById('empty');
+  if (!data.length) { empty.style.display = ''; table.innerHTML=''; return; }
+  empty.style.display = 'none';
+  table.innerHTML = `
+    <thead>
+      <tr><th>No.</th><th>Buyer</th><th>Date</th><th>Total</th><th class="no-print">Actions</th></tr>
+    </thead>
+    <tbody>
+      ${data.map(d => `
+        <tr>
+          <td>${d.invoiceNumber}</td>
+          <td>${d.buyer?.name || ''}</td>
+          <td>${d.invoiceDate || ''}</td>
+          <td>£${Number(d.totals?.grandTotal||0).toFixed(2)}</td>
+          <td class="no-print actions">
+            <a class="btn" href="view.html#i=${d.id}">View</a>
+            <a class="btn" href="builder.html#edit=${d.id}">Edit</a>
+            <button class="btn" data-del="${d.id}">Delete</button>
+          </td>
+        </tr>`).join('')}
+    </tbody>`;
+  table.addEventListener('click', async (e) => {
+    if (e.target.matches('[data-del]')) {
+      const id = e.target.getAttribute('data-del');
+      if (!confirm('Delete invoice?')) return;
+      // delete attachments first
+      const inv = await getInvoice(id);
+      if (inv?.attachments?.length) {
+        for (const a of inv.attachments) {
+          if (a?.fileId) { try { await deleteFile(a.fileId); } catch {} }
+        }
+      }
+      await deleteInvoice(id);
+      render();
+    }
+  }, { once: true });
+}
+render();
+
+// PWA registration
+if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js'); }
+</script>
+</body>
+</html>

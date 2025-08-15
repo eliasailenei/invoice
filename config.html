@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <title>Settings & Clients</title>
+  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+<div class="container">
+  <h1>Settings</h1>
+  <div class="card">
+    <h3>Seller profile</h3>
+    <div class="row">
+      <div><label>Business name<input id="s_name" class="input"></label></div>
+      <div><label>Email<input id="s_email" class="input"></label></div>
+      <div><label>Phone<input id="s_phone" class="input"></label></div>
+      <div><label>Address<textarea id="s_addr" class="input" rows="3"></textarea></label></div>
+    </div>
+    <div class="row">
+      <div><label>Default payment terms<input id="s_terms" class="input" placeholder="Payment terms"></label></div>
+      <div><label>Currency<input id="s_curr" class="input" value="GBP"></label></div>
+    </div>
+    <div class="actions"><button id="saveSeller" class="btn primary">Save</button><a class="btn" href="index.html">Back</a></div>
+  </div>
+
+  <div class="card">
+    <h3>Clients</h3>
+    <div class="row">
+      <div><label>Name<input id="c_name" class="input"></label></div>
+      <div><label>Email<input id="c_email" class="input"></label></div>
+      <div><label>Address<textarea id="c_addr" class="input" rows="2"></textarea></label></div>
+    </div>
+    <div class="actions"><button id="addClient" class="btn">Add client</button></div>
+    <ul id="clientList"></ul>
+  </div>
+</div>
+
+<script type="module">
+import { getSetting, setSetting, listClients, putClient, deleteClient } from './db.js';
+
+async function load() {
+  const seller = await getSetting('seller', {});
+  s_name.value  = seller.name  || '';
+  s_email.value = seller.email || '';
+  s_phone.value = seller.phone || '';
+  s_addr.value  = seller.address || '';
+  s_terms.value = seller.terms || 'Payment due within 14 days';
+  s_curr.value  = seller.currency || 'GBP';
+  renderClients();
+}
+
+async function renderClients() {
+  const ul = document.getElementById('clientList');
+  const cs = await listClients();
+  ul.innerHTML = cs.map(c => `
+    <li>
+      <strong>${c.name}</strong> — ${c.email || ''} • ${c.address || ''}
+      <button class="btn" data-del="${c.id}" style="margin-left:1em">Remove</button>
+    </li>
+  `).join('');
+  ul.querySelectorAll('[data-del]').forEach(btn => {
+    btn.onclick = async () => {
+      if (confirm('Remove this client?')) {
+        await deleteClient(btn.getAttribute('data-del'));
+        renderClients();
+      }
+    };
+  });
+}
+
+saveSeller.onclick = async () => {
+  const seller = {
+    name: s_name.value.trim(),
+    email: s_email.value.trim(),
+    phone: s_phone.value.trim(),
+    address: s_addr.value.trim(),
+    terms: s_terms.value.trim(), // <-- now empty by default
+    currency: s_curr.value.trim() || 'GBP',
+    vatRegistered: false
+  };
+  if (!seller.name || !seller.address) return alert('Name and address required.');
+  await setSetting('seller', seller);
+  await setSetting('isInit', true);
+  alert('Saved.');
+};
+
+addClient.onclick = async () => {
+  const name = c_name.value.trim();
+  if (!name) return alert('Client name required.');
+  await putClient({ id: (window.crypto?.randomUUID ? crypto.randomUUID() : uuidv4()), name, email: c_email.value.trim(), address: c_addr.value.trim() });
+  c_name.value = c_email.value = c_addr.value = '';
+  renderClients();
+};
+
+function uuidv4() {
+  // fallback for browsers without crypto.randomUUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+load();
+</script>
+</body>
+</html>
